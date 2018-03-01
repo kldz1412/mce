@@ -5,12 +5,12 @@ void printClock(int *a)
 	int size, i;
 
 	PMPI_Comm_size(MPI_COMM_WORLD, &size);
-	fprintf(fp, "[");
+	//fprintf(fp, "[");
 	for (i = 0; i < size - 1; i++)
 	{
 		fprintf(fp, "%d|", a[i]);
 	}
-	fprintf(fp, "%d]\n", a[size-1]);
+	fprintf(fp, "%d\n", a[size-1]);
 }
 
 void tracels(bool isLoad, void *varaddr) //TODO

@@ -1,5 +1,7 @@
 #include "detector.h"
 
+int numproc;
+
 int getEventCode(char *str)
 {
 	if (strstr(str, "Fence") != NULL)
@@ -110,12 +112,13 @@ char *convertCode2Name(int code)
 
 int *getClock(char *str)
 {
-	int *clock, size, i;
-	size = strlen(str) / 2;
-	clock = (int *) malloc(size * sizeof(int));
-	for (i = 0; i < size; i++)
-	{
-		clock[i] = str[i * 2 + 1] - '0';
+	int *clock, i = 0;
+	clock = (int *) malloc(numproc * sizeof(int));
+	char * p = strtok(str, "|");
+	while (p) {
+		clock[i] = atoi(p);
+		p = strtok(NULL, "|");
+		i++;
 	}
 	return clock;
 }
@@ -449,6 +452,7 @@ int main(int argc, char **argv)
 	char *buffer, *clockStr, *tmpBuffer, *tmpStr;
 
 	size = atoi(argv[1]);
+	numproc = atoi(argv[1]);
 	FILE **pFile = (FILE **) malloc(size * sizeof(FILE *));
 	List *aList = (List *) malloc(size * sizeof(List));
 	for (i = 0; i < size; i++)
