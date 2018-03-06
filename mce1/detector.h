@@ -10,8 +10,8 @@
 
 #define	FENCE			1
 #define	BARRIER			2
-#define	GET			3
-#define	PUT			4
+#define	GET				3
+#define	PUT				4
 #define	ACCUMULATE		5
 #define	POST			6
 #define	START			7
@@ -24,41 +24,47 @@
 #define CREATE			14
 
 typedef struct Comm {
-        int code;
-	int target_rank;
+    int code;
 	char *target_addr;
 	int *clock;
-        struct Comm *next;
+    struct Comm *next;
 } Comm;
 
 typedef struct Loca {
-        int code;
-        char *varAddr;
-	int *clock;
-        struct Loca *next;
+    int code;
+    char *varAddr;
+    struct Loca *next;
 } Loca;
 
-typedef struct Unif {
+/*typedef struct Unif {
 	int code;
 	char *varAddr;
 	struct Unif *next;
-} Unif;
+} Unif;*/
+
+typedef struct LocaGroup {
+	struct Loca *locaHead;
+	struct Loca *locaTail;
+	LocaGroup *next;
+	int *clock;
+} LocaGroup;
 
 typedef struct List {
-        char *base;
-        int size;
-        int disp_unit;
-        struct Comm *commHead;
+    char *base;
+    int size;
+    int disp_unit;
+    struct Comm *commHead;
 	struct Comm *commTail;
-        struct Loca *locaHead;
-	struct Loca *locaTail;
+    struct LocaGroup *locaGroupHead;
+	struct LocaGroup *locaGroupTail;
+	int *lastClock;
 } List;
 
-typedef struct Chai {
+/*typedef struct Chai {
 	int rank;
 	struct Unif *head;
 	struct Unif *tail;
-} Chai;
+} Chai;*/
 
 int getEventCode(char *);
 char *convertCode2Name(int);

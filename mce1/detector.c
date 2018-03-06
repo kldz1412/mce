@@ -110,16 +110,19 @@ char *convertCode2Name(int code)
         }
 }
 
-int *getClock(char *str)
+int *getClock(char *buffer)
 {
+	char *clockStr = strstr(buffer, "\t");
+	clockStr++;
 	int *clock, i = 0;
 	clock = (int *) malloc(numproc * sizeof(int));
-	char * p = strtok(str, "|");
+	char * p = strtok(clockStr, "|");
 	while (p) {
 		clock[i] = atoi(p);
 		p = strtok(NULL, "|");
 		i++;
 	}
+	//free clockStr
 	return clock;
 }
 
@@ -160,40 +163,67 @@ bool isConcurrent(int *clock1, int rank1, int *clock2, int rank2)
 	return true;
 }
 
-void insertCommNode(List *aList, int code, int target_rank, char *target_addr/*, int *clock, int size*/)
+void insertCommNode(List *aList,char* buffer, int self_rank)
 {
-	if (aList->commHead == NULL && aList->commTail == NULL)
+	if (aList[self_rank]->commHead == NULL && aList[self_rank]->commTail == NULL)
 	{
-		aList->commTail = (Comm *) malloc(sizeof(Comm));
-		aList->commHead = aList->commTail;
+		aList[self_rank]->commTail = (Comm *) malloc(sizeof(Comm));
+		aList[self_rank]->commHead = aList[self_rank]->commTail;
 	}
 	else
 	{
-		aList->commTail->next = (Comm *) malloc(sizeof(Comm));
-		aList->commTail = aList->commTail->next;
+		aList[self_rank]->commTail->next = (Comm *) malloc(sizeof(Comm));
+		aList[self_rank]->commTail = aList[self_rank]->commTail->next;
 	}
-	aList->commTail->code = code;
-	aList->commTail->target_rank = target_rank;
-	aList->commTail->target_addr = target_addr;
-	//aList.commTail->clock = (int *) malloc (size * sizeof(int));
-	aList->commTail->next = NULL;
+	aList[self_rank]->commTail->code = getEventCode(buffer);
+	char *p = strtok(buffer, "\t");
+	p = strtok (NULL, "\t");
+	p = strtok (NULL, "\t");
+	p = strtok (NULL, "\t");
+	int target_rank = atoi(p);
+	aList[self_rank]->commTail->target_addr = aList[target_rank].base;
+	aList[self_rank]->commTail->clock = aList[self_rank].lastClock;
+	aList[self_rank]->commTail->next = NULL;
 }
 
-void insertLocaNode(List *aList, int code, char *varAddr)
+void checkNinsertLoca(List *aList,char* buffer)
 {
-	if (aList->locaHead == NULL && aList->locaTail == NULL)
-        {
-                aList->locaTail = (Loca *) malloc(sizeof(Loca));
-                aList->locaHead = aList->locaTail;
-        }
-        else
-        {
-                aList->locaTail->next = (Loca *) malloc(sizeof(Loca));
-                aList->locaTail = aList->locaTail->next;
-        }
-	aList->locaTail->code = code;
-	aList->locaTail->varAddr = varAddr;
-	aList->locaTail->next = NULL;
+	if (!aList->locaGroupTail->locaHead)
+	{
+        aList->locaGroupTail->locaTail = (Loca *) malloc(sizeof(Loca));
+        aList->locaGroupTail->locaHead = aList->locaTail;
+    }
+    else
+    {
+        aList->locaGroupTail->locaTail->next = (Loca *) malloc(sizeof(Loca));
+        aList->locaGroupTail->locaTail = aList->locaGroupTail->locaTail->next;
+    }
+	aList->locaGroupTail->locaTail->code = getEventCode(buffer);
+	char *varAddr = strstr(buffer, "\t");
+	varAddr++;
+	aList->locaGroupTail->locaTail->varAddr = varAddr;
+	aList->locaGroupTail->locaTail->next = NULL;
+	//check
+	Loca *tmp = aList->locaGroupTail->locaHead;
+	while (aList->locaGroupTail->locaTail != tmp) {
+		checkInside(tmp, aList->locaGroupTail->locaTail);
+	}
+}
+
+void insertGroup(List *aList,char* buffer)
+{
+	if (!aList->locaGroupTail)
+	{
+        aList->locaGroupTail = (LocaGroup *) malloc(sizeof(LocaGroup));
+        aList->locaGroupHead = aList->locaGroupTail;
+    }
+    else
+    {
+        aList->locaGroupTail->next = (LocaGroup *) malloc(sizeof(LocaGroup));
+        aList->locaGroupTail = aList->locaGroupTail->next;
+    }
+	aList->locaGroupTail->clock = aList.lastClock;
+	aList->commTail->next = NULL;
 }
 
 void freeList(List *aList, int size)
@@ -444,6 +474,11 @@ void detectMCEAcrossProc(List *aList, int size)
 		}
 	}
 }
+bool isSynOp(int code){
+	if (code < 6) return false;
+	if (code > 11) return false;
+	return true;
+}
 
 int main(int argc, char **argv)
 {
@@ -484,10 +519,64 @@ int main(int argc, char **argv)
 
 		aList[i].commHead = NULL;
 		aList[i].commTail = NULL;
-		aList[i].locaHead = NULL;
-		aList[i].locaTail = NULL;
+		aList[i].locaGroupHead = NULL;
+		aList[i].locaGroupTail = NULL;
 		free(buffer);
 	}
+
+
+	for (i = 0; i < numproc; i++){
+		while (fgets(buffer, BUFFER_SIZE, pFile[i]) != NULL) {
+			int code = getEventCode(buffer);
+			if (code == FENCE || code == BARRIER) {
+				aList[i].lastClock = getClock(buffer);
+				break;
+			}
+			else {
+				if (isSynOp(code)) {
+					aList[i].lastClock = getClock(buffer);
+					insertGroup(aList[i], buffer);
+				}
+				else {
+					if (code >= GET && code <= ACCUMULATE) {
+						checkNinsertLoca(aList[i], buffer);
+						insertCommNode(aList[i], buffer, i);
+					}
+					else if (code >= LOAD && code <= STORE) {
+						checkNinsertLoca(aList[i], buffer);
+					}
+				}
+			}
+		}
+	}
+	//check across
+	checkAcross(aList);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 	index = 0;
 	while (index < size)
