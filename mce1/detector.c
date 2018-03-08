@@ -126,16 +126,160 @@ int *getClock(char *buffer)
 	return clock;
 }
 
-bool equalClock(int *clock1, int *clock2, int size)
+
+bool isConcurrent(int *clock1, int rank1, int *clock2, int rank2)
 {
-	int i;
-	for (i = 0; i < size; i++)
-	{
-		if (clock1[i] != clock2[i])
-		{
-			return false;
+	if (clock1[rank2] >= clock2[rank2])
+		return false;
+	if (clock2[rank1] >= clock1[rank1])
+		return false;
+	return true;
+}
+
+bool isCommConflict(Comm *op1, int rank1, Comm *op2, int rank2) {
+	if (op1->target_addr == op2->target_addr) {
+		switch (op1->code) {
+			case PUT:
+				if (isConcurrent(op1->clock, rank1, op2->clock, rank2)) {
+					return true;
+				}
+				break;
+			case GET:
+				if (op2->code == GET) {
+					return false;
+				}
+				else if (isConcurrent(op1->clock, rank1, op2->clock, rank2)) {
+					return true;
+				}
+				return false;
+				break;
+			case ACCUMULATE:
+				if (op2->code == ACCUMULATE) {
+					return false;
+				}
+				else if (isConcurrent(op1->clock, rank1, op2->clock, rank2)) {
+					return true;
+				}
+				return false;
+				break;
 		}
 	}
+	else {
+		return false;
+	}
+}
+
+void checkNinsertComm(List **aList,char* buffer, int self_rank)
+{
+	char *p = strtok(buffer, "\t");
+	p = strtok (NULL, "\t");
+	p = strtok (NULL, "\t");
+	p = strtok (NULL, "\t");
+	int target_rank = atoi(p);
+	if (!aList[target_rank]->commHead)
+	{
+		aList[target_rank]->commTail = (Comm *) malloc(sizeof(Comm));
+		aList[target_rank]->commHead = aList[target_rank]->commTail;
+	}
+	else
+	{
+		aList[target_rank]->commTail->next = (Comm *) malloc(sizeof(Comm));
+		aList[target_rank]->commTail = aList[target_rank]->commTail->next;
+	}
+	aList[target_rank]->commTail->code = getEventCode(buffer);
+	aList[target_rank]->commTail->target_addr = aList[target_rank]->base;
+	aList[target_rank]->commTail->clock = aList[self_rank]->lastClock;
+	aList[target_rank]->commTail->origin = self_rank;
+	aList[target_rank]->commTail->next = NULL;
+	//check
+	Comm *tmp = aList[target_rank]->commHead;
+	while (aList[target_rank]->commTail != tmp) {
+		if (isCommConflict(tmp, tmp->origin, aList[target_rank]->commTail, self_rank)) {
+			printf("MCE across process on %s between %s and %s in process %d\n", tmp->target_addr, 
+            	convertCode2Name(tmp->code), convertCode2Name(aList[target_rank]->commTail->code), target_rank);
+		}
+		tmp = tmp->next;
+	}
+}
+
+bool isConflictAcross(Loca *loca, Comm *comm) {
+	if (comm->code == PUT || comm->code == ACCUMULATE) {
+		if (strcmp(loca->varAddr, comm->target_addr) == 0) return true;
+		return false;
+	}
+	else {
+		if (loca->code == STORE || loca->code == GET) return true;
+		return false;
+	}
+}
+
+bool isConflictInside(Loca *op1, Loca *op2){
+	if (op1->code == GET) {
+		if (strcmp(op1->varAddr, op2->varAddr) == 0) { //overlapping address
+			return true;
+		}
+	}
+	else if (op1->code == PUT || op1->code == ACCUMULATE) {
+		if (op2->code == STORE || op2->code == GET) {
+			if (strcmp(op1->varAddr, op2->varAddr) == 0) { //overlapping address
+			return true;
+		}
+		}
+	}
+	return false;
+}
+
+void checkNinsertLoca(List *aList,char* buffer)
+{
+	if (!aList->locaGroupTail->locaHead)
+	{
+        aList->locaGroupTail->locaTail = (Loca *) malloc(sizeof(Loca));
+        aList->locaGroupTail->locaHead = aList->locaGroupTail->locaTail;
+    }
+    else
+    {
+        aList->locaGroupTail->locaTail->next = (Loca *) malloc(sizeof(Loca));
+        aList->locaGroupTail->locaTail = aList->locaGroupTail->locaTail->next;
+    }
+	aList->locaGroupTail->locaTail->code = getEventCode(buffer);
+	char *varAddr = strstr(buffer, "\t");
+	varAddr++;
+	aList->locaGroupTail->locaTail->varAddr = varAddr;
+	aList->locaGroupTail->locaTail->next = NULL;
+	//check
+	Loca *tmp = aList->locaGroupTail->locaHead;
+	while (aList->locaGroupTail->locaTail != tmp) {
+		if (isConflictInside(tmp, aList->locaGroupTail->locaTail)) {
+			printf("MCE within an epoch on %s between %s and %s in process %d\n", tmp->varAddr, 
+            	convertCode2Name(tmp->code), convertCode2Name(aList->locaGroupTail->locaTail->code), aList->rank);
+		}
+		tmp = tmp->next;
+	}
+}
+
+
+
+void insertGroup(List *aList,char* buffer)
+{
+	if (!aList->locaGroupTail)
+	{
+        aList->locaGroupTail = (LocaGroup *) malloc(sizeof(LocaGroup));
+        aList->locaGroupHead = aList->locaGroupTail;
+    }
+    else
+    {
+        aList->locaGroupTail->next = (LocaGroup *) malloc(sizeof(LocaGroup));
+        aList->locaGroupTail = aList->locaGroupTail->next;
+    }
+	aList->locaGroupTail->clock = aList->lastClock;
+	aList->commTail->next = NULL;
+}
+
+
+
+bool isSynOp(int code){
+	if (code < 6) return false;
+	if (code > 11) return false;
 	return true;
 }
 
@@ -154,332 +298,6 @@ char *getData(char **buffer)
 	return tmpStr;
 }
 
-bool isConcurrent(int *clock1, int rank1, int *clock2, int rank2)
-{
-	if (clock1[rank2] >= clock2[rank2])
-		return false;
-	if (clock2[rank1] >= clock1[rank1])
-		return false;
-	return true;
-}
-
-void insertCommNode(List *aList,char* buffer, int self_rank)
-{
-	if (aList[self_rank]->commHead == NULL && aList[self_rank]->commTail == NULL)
-	{
-		aList[self_rank]->commTail = (Comm *) malloc(sizeof(Comm));
-		aList[self_rank]->commHead = aList[self_rank]->commTail;
-	}
-	else
-	{
-		aList[self_rank]->commTail->next = (Comm *) malloc(sizeof(Comm));
-		aList[self_rank]->commTail = aList[self_rank]->commTail->next;
-	}
-	aList[self_rank]->commTail->code = getEventCode(buffer);
-	char *p = strtok(buffer, "\t");
-	p = strtok (NULL, "\t");
-	p = strtok (NULL, "\t");
-	p = strtok (NULL, "\t");
-	int target_rank = atoi(p);
-	aList[self_rank]->commTail->target_addr = aList[target_rank].base;
-	aList[self_rank]->commTail->clock = aList[self_rank].lastClock;
-	aList[self_rank]->commTail->next = NULL;
-}
-
-void checkNinsertLoca(List *aList,char* buffer)
-{
-	if (!aList->locaGroupTail->locaHead)
-	{
-        aList->locaGroupTail->locaTail = (Loca *) malloc(sizeof(Loca));
-        aList->locaGroupTail->locaHead = aList->locaTail;
-    }
-    else
-    {
-        aList->locaGroupTail->locaTail->next = (Loca *) malloc(sizeof(Loca));
-        aList->locaGroupTail->locaTail = aList->locaGroupTail->locaTail->next;
-    }
-	aList->locaGroupTail->locaTail->code = getEventCode(buffer);
-	char *varAddr = strstr(buffer, "\t");
-	varAddr++;
-	aList->locaGroupTail->locaTail->varAddr = varAddr;
-	aList->locaGroupTail->locaTail->next = NULL;
-	//check
-	Loca *tmp = aList->locaGroupTail->locaHead;
-	while (aList->locaGroupTail->locaTail != tmp) {
-		checkInside(tmp, aList->locaGroupTail->locaTail);
-	}
-}
-
-void insertGroup(List *aList,char* buffer)
-{
-	if (!aList->locaGroupTail)
-	{
-        aList->locaGroupTail = (LocaGroup *) malloc(sizeof(LocaGroup));
-        aList->locaGroupHead = aList->locaGroupTail;
-    }
-    else
-    {
-        aList->locaGroupTail->next = (LocaGroup *) malloc(sizeof(LocaGroup));
-        aList->locaGroupTail = aList->locaGroupTail->next;
-    }
-	aList->locaGroupTail->clock = aList.lastClock;
-	aList->commTail->next = NULL;
-}
-
-void freeList(List *aList, int size)
-{
-	int i;
-	for (i = 0; i < size; i++)
-	{
-		while (aList[i].commHead != NULL)
-		{
-			aList[i].commTail = aList[i].commHead;
-			aList[i].commHead = aList[i].commHead->next;
-			free(aList[i].commTail->target_addr);
-			free(aList[i].commTail);
-		}
-		aList[i].commTail = NULL;
-
-		while (aList[i].locaHead != NULL)
-		{
-			aList[i].locaTail = aList[i].locaHead;
-			aList[i].locaHead = aList[i].locaHead->next;
-			free(aList[i].locaTail->varAddr);
-			free(aList[i].locaTail);
-		}
-		aList[i].locaTail = NULL;
-	}
-}
-
-void printList(List *aList, int size)
-{
-	int i;
-	printf("\nPrinting a List...\n");
-	for (i = 0; i < size; i++)
-	{
-		printf("rank=%d base=%s size=%d disp_unit=%d\n", i, aList[i].base, aList[i].size, aList[i].disp_unit);
-		Comm *tmp1 = aList[i].commHead;
-		while (tmp1 != NULL)
-		{
-			printf("code=%s target_rank=%d\n", convertCode2Name(tmp1->code), tmp1->target_rank);
-			tmp1 = tmp1->next;
-		}
-		Loca *tmp2 = aList[i].locaHead;
-		while (tmp2 != NULL)
-		{
-			printf("code=%s\n", convertCode2Name(tmp2->code));
-			tmp2 = tmp2->next;
-		}
-	}
-}
-
-void insertChainNode(Chai *aChain, int code, char *varAddr)
-{
-	if (aChain->head == NULL && aChain->tail == NULL)
-	{
-		aChain->tail = (Unif *) malloc(sizeof(Unif));
-		aChain->head = aChain->tail;
-	}
-	else
-	{
-		aChain->tail->next = (Unif *) malloc(sizeof(Unif));
-		aChain->tail = aChain->tail->next;
-	}
-	aChain->tail->code = code;
-	aChain->tail->varAddr = (char *) malloc((strlen(varAddr) + 1) * sizeof (char));
-	strcpy(aChain->tail->varAddr, varAddr);
-	aChain->tail->next = NULL;
-}
-
-void printChain(Chai aChain)
-{
-	printf("\nPrinting a Chain...\n");
-	printf("rank=%d\n", aChain.rank);
-	Unif *tmp = aChain.head;
-	while (tmp != NULL)
-	{
-		printf("code=%s varAddr=%s\n", convertCode2Name(tmp->code), tmp->varAddr);
-		tmp = tmp->next;
-	}
-}
-
-void readEventWithinEpoch(FILE **pFile, int index, List *aList, Chai *aChain, int endEvent)
-{
-	while (true)
-        {
-        	char *buffer = (char *) malloc(BUFFER_SIZE * sizeof(char));
-        	if (fgets(buffer, BUFFER_SIZE, pFile[index]) != NULL)
-                {
-			printf("C9: %s", buffer);
-			getchar();
-                	int eventCode = getEventCode(buffer);
-                       	if (eventCode != endEvent)
-                        {
-				if (eventCode >= GET && eventCode <= ACCUMULATE)
-				{
-					char *tmpBuffer = buffer;
-					char *tmpStr = getData(&tmpBuffer);
-					free(tmpStr);
-					tmpStr = getData(&tmpBuffer);
-					free(tmpStr);
-					char *origin_addr = getData(&tmpBuffer);
-					tmpStr = getData(&tmpBuffer);
-					int target_rank = atoi(tmpStr);
-					free(tmpStr);
-					char *target_addr = 
-					(char *) malloc((strlen(aList[target_rank].base) + 1) * sizeof(char));
-					strcpy(target_addr, aList[target_rank].base);
-					insertCommNode(&aList[target_rank], eventCode, target_rank, target_addr);
-					insertChainNode(aChain, eventCode, origin_addr);
-				}
-				else if (eventCode >= LOAD && eventCode <= STORE)
-				{
-					char *tmpBuffer = buffer;
-					char *tmpStr = getData(&tmpBuffer);
-					free(tmpStr);
-					char *varAddr = getData(&tmpBuffer);
-					insertLocaNode(&aList[index], eventCode, varAddr);
-					insertChainNode(aChain, eventCode, varAddr);
-				}
-				else 
-				{ 
-					/* do nothing */ 
-				}
-                    	}
-                        else //if (eventCode == endEvent)
-                        {
-                        	break;
-                        }
-			free(buffer);
-          	}
-		else //if (fgets(buffer, BUFFER_SIZE, pFile[i]) != NULL)
-                {
-                	/* do nothing */
-                }
-	}
-}
-
-void detectMCEInProc(Chai aChain)
-{
-	if (aChain.head == NULL && aChain.tail == NULL) 
-	{ 
-		/* do nothing */ 
-	}
-	else 
-	{
-		Unif *tmp;
-		while (aChain.head != NULL)
-		{
-			aChain.tail = aChain.head;
-			if (aChain.head->code != LOAD && aChain.head->code != STORE)
-                        {
-				tmp = aChain.head->next;
-                        	while (tmp != NULL)
-                        	{
-                                	if (aChain.head->code == GET)
-                                	{
-						if (strcmp(aChain.head->varAddr, tmp->varAddr) == 0)
-						{
-                                                	printf("MCE within an epoch on %s between %s and %s in process %d\n", tmp->varAddr, 
-                                                        	convertCode2Name(aChain.head->code), convertCode2Name(tmp->code), aChain.rank);
-						}
-						else //if (strcmp(aChain.tail->varAddr, tmp->varAddr) != 0)
-						{
-							/* do nothing */
-						}
-                                	}
-                                	else if (aChain.head->code == PUT || aChain.head->code == ACCUMULATE)
-                                	{
-						if (tmp->code == GET || tmp->code == STORE)
-						{
-							if (strcmp(aChain.head->varAddr, tmp->varAddr) == 0)
-                                                	{
-                                                        	printf("MCE within an epoch on %s between %s and %s in process %d\n", 
-									tmp->varAddr, convertCode2Name(aChain.head->code), 
-										convertCode2Name(tmp->code), aChain.rank);
-                                                	}
-                                                	else //if (strcmp(aChain.tail->varAddr, tmp->varAddr) != 0)
-                                                	{
-                                                        	/* do nothing */
-                                                	}
-						}
-						else //if (tmp->varAddr->code != GET && tmp->varAddr->code != STORE)
-						{
-							/* do nothing */
-						}
-                                	}
-                                	else //if (aChain.tail->code == LOAD || aChain.tail->code == STORE) 
-                                	{
-                                        	/* do nothing */
-                                	}
-                                	tmp = tmp->next;
-                        	}
-                        }
-                        else //if (aChain.tail->code == LOAD || aChain.tail->code == STORE) 
-                        {
-                                        /* do nothing */
-                        }
-			aChain.head = aChain.head->next;
-			free(aChain.tail->varAddr);
-			aChain.tail->next = NULL;
-                	free(aChain.tail);
-		}
-	}
-}
-
-void detectMCEAcrossProc(List *aList, int size)
-{
-	int i;
-	Comm *commTmp1, *commTmp2;
-	Loca *locaTmp3;
-	for (i = 0; i < size; i++)
-	{
-		commTmp1 = aList[i]->commHead;
-		while (commTmp1 != NULL)
-		{
-			commTmp2 = commTmp2->next;
-			while (commTmp2 != NULL)
-			{
-				if (strcmp(commTmp1->target_addr, commTmp2->target_addr) == 0 &&
-					isConcurrent(commTmp1->clock, commTmp1->origin_rank, commTmp2->clock, commTmp2->origin_rank) == true)
-				{
-					printf("MCE across processes on %s in %d between %s in process %d and %s in process %d\n",
-							commTmp1->target_addr, i, convertCode2Name(commTmp1->code), commTmp1->origin_rank,
-									convertCode2Name(commTmp2->code), commTmp2->origin_rank);
-				}
-				else 
-				{
-					/* do nothing */
-				}
-				commTmp2 = commTmp2->next;
-			}
-			commTmp1 = commTmp1->next;
-			
-			locaTmp3 = aList[i]->locaHead;	
-			while (locaTmp3 != NULL)
-			{
-				if (strcmp(commTmp1->target_addr, locaTmp3->varAddr) == 0 &&
-					isConcurrent(commTmp1->clock, commTmp1->origin_rank, locaTmp3->clock, i) == true)
-				{
-					printf("MCE across processes on %s in %d between %s in process %d and %s\n",
-                                                        commTmp1->target_addr, i, convertCode2Name(commTmp1->code), commTmp1->origin_rank,
-                                                                        convertCode2Name(locaTmp3->code));
-				}
-				else 
-				{
-					/* do nothing */
-				}
-				locaTmp3 = locaTmp3->next;
-			}
-		}
-	}
-}
-bool isSynOp(int code){
-	if (code < 6) return false;
-	if (code > 11) return false;
-	return true;
-}
-
 int main(int argc, char **argv)
 {
 	int size, i, index, *clock, *tmpClock, tmpInt, eventCode, j;
@@ -488,6 +306,7 @@ int main(int argc, char **argv)
 
 	size = atoi(argv[1]);
 	numproc = atoi(argv[1]);
+	printf("1\n");
 	FILE **pFile = (FILE **) malloc(size * sizeof(FILE *));
 	List *aList = (List *) malloc(size * sizeof(List));
 	for (i = 0; i < size; i++)
@@ -523,194 +342,77 @@ int main(int argc, char **argv)
 		aList[i].locaGroupTail = NULL;
 		free(buffer);
 	}
-
-
-	for (i = 0; i < numproc; i++){
-		while (fgets(buffer, BUFFER_SIZE, pFile[i]) != NULL) {
-			int code = getEventCode(buffer);
-			if (code == FENCE || code == BARRIER) {
-				aList[i].lastClock = getClock(buffer);
-				break;
-			}
-			else {
-				if (isSynOp(code)) {
+	printf("2\n");
+	bool isFinished = true;
+	while (true) {
+		for (i = 0; i < numproc; i++){
+			while (fgets(buffer, BUFFER_SIZE, pFile[i]) != NULL) {
+				printf("%s\n",buffer);
+				int code = getEventCode(buffer);
+				if (code == FENCE || code == BARRIER) {
 					aList[i].lastClock = getClock(buffer);
-					insertGroup(aList[i], buffer);
+					printf("chua break\n" );
+					isFinished = false;
+					break;
 				}
 				else {
-					if (code >= GET && code <= ACCUMULATE) {
-						checkNinsertLoca(aList[i], buffer);
-						insertCommNode(aList[i], buffer, i);
+					if (isSynOp(code)) {
+						aList[i].lastClock = getClock(buffer);
+						insertGroup(&aList[i], buffer);
 					}
-					else if (code >= LOAD && code <= STORE) {
-						checkNinsertLoca(aList[i], buffer);
-					}
-				}
-			}
-		}
-	}
-	//check across
-	checkAcross(aList);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	index = 0;
-	while (index < size)
-	{
-		buffer = (char *) malloc(BUFFER_SIZE * sizeof(char));
-		if (fgets(buffer, BUFFER_SIZE, pFile[index]) != NULL)
-		{              
-			printf("C1: %s", buffer);
-			if (getEventCode(buffer) == FENCE)
-			{
-				/* get Clock */
-				clockStr = (char *) malloc((size * 2 + 2) * sizeof(char));
-				memcpy(clockStr, strstr(buffer, "["), size * 2 + 1);
-				clockStr[size * 2 + 1] = '\0';
-				clock = getClock(clockStr);
-				free(buffer);
-				
-				for (i = index + 1; i < size; i++)
-				{
-					while (true)
-					{
-						buffer = (char *) malloc(BUFFER_SIZE * sizeof(char));
-						if (fgets(buffer, BUFFER_SIZE, pFile[i]) != NULL)
-						{
-							printf("C2: %s",buffer);
-							if (getEventCode(buffer) == FENCE)
-							{
-								clockStr = (char *) malloc((size * 2 + 2) * sizeof(char));
-                               					memcpy(clockStr, strstr(buffer, "["), size * 2 + 1);
-                               					clockStr[size * 2 + 1] = '\0';
-								if (equalClock(clock, getClock(clockStr), size) == true)
-								{
-									break;
-								}
-							}
+					else {
+						if (code >= GET && code <= ACCUMULATE) {
+							checkNinsertLoca(&aList[i], buffer);
+							checkNinsertComm(&aList, buffer, i);
 						}
-						free(buffer);
+						else if (code >= LOAD && code <= STORE) {
+							checkNinsertLoca(&aList[i], buffer);
+						}
 					}
 				}
-	
-				for (i = index; i < size; i++)
-                        	{
-					Chai aChain;
-					aChain.rank = i;
-					aChain.head = NULL;
-					aChain.tail = NULL;
-					readEventWithinEpoch(pFile, i, aList, &aChain, FENCE);
-					
-					/* detect MCE within an epoch */
-					detectMCEInProc(aChain);
-
-                        	}
-				
-				/* dectect MCE across processes */
-				freeList(aList, size);
 			}
-			
-			else if (getEventCode(buffer) == POST)
-			{
-				/* get Clock */
-                                clockStr = (char *) malloc((size * 2 + 2) * sizeof(char));
-                                memcpy(clockStr, strstr(buffer, "["), size * 2 + 1);
-                                clockStr[size * 2 + 1] = '\0';
-                                clock = getClock(clockStr);
-				
-				Chai aChain;
-                                aChain.rank = index;
-                                aChain.head = NULL;
-                                aChain.tail = NULL;
-				readEventWithinEpoch(pFile, index, aList, &aChain, WAIT);
-
-				/* detect MCE within an epoch */
-                                detectMCEInProc(aChain);
-			}
-			else if (getEventCode(buffer) == START)
-			{
-				/* get Clock */
-                                clockStr = (char *) malloc((size * 2 + 2) * sizeof(char));
-                                memcpy(clockStr, strstr(buffer, "["), size * 2 + 1);
-                                clockStr[size * 2 + 1] = '\0';
-                                clock = getClock(clockStr);
-
-                                Chai aChain;
-                                aChain.rank = index;
-                                aChain.head = NULL;
-                                aChain.tail = NULL;
-                                readEventWithinEpoch(pFile, index, aList, &aChain, COMPLETE);
-
-                                /* detect MCE within an epoch */
-                                detectMCEInProc(aChain);
-			}
-			else if (getEventCode(buffer) == LOCK)
-			{
-                                /* get Clock */
-                                clockStr = (char *) malloc((size * 2 + 2) * sizeof(char));
-                                memcpy(clockStr, strstr(buffer, "["), size * 2 + 1);
-                                clockStr[size * 2 + 1] = '\0';
-                                clock = getClock(clockStr);
-
-                                Chai aChain;
-                                aChain.rank = index;
-                                aChain.head = NULL;
-                                aChain.tail = NULL;
-                                readEventWithinEpoch(pFile, index, aList, &aChain, UNLOCK);
-
-                                /* detect MCE within an epoch */
-                                detectMCEInProc(aChain);
-			}
-			else if (getEventCode(buffer) == BARRIER)
-			{
-				//detect MCE across processes
-			}
-			else 
-			{ 
-				/* do nothing */ 
+			if (aList[i].locaGroupHead != NULL || aList[i].commHead != NULL) isFinished = false;
+		}
+		printf("1\n");
+		if (isFinished) break;
+		//check across
+		printf("1\n");
+		//checkAcross(aList);
+		for (i = 0; i< numproc; i++){
+			Comm *tmpComm = aList[i].commHead;
+			while (!tmpComm) {
+				LocaGroup *tmpGroup = aList[i].locaGroupHead;
+				while (!tmpGroup) {
+					if (isConcurrent(tmpComm->clock, tmpComm->origin, tmpGroup->clock, aList[i].rank)) {
+					Loca *tmpLoca = tmpGroup->locaHead;
+					while (!tmpLoca) {
+						//check tmpLoca vs tmpComm
+						if (isConflictAcross(tmpLoca, tmpComm)) {
+							printf("MCE across process on %s between %s and %s in process %d\n", tmpLoca->varAddr, 
+	            				convertCode2Name(tmpLoca->code), convertCode2Name(tmpComm->code), i);
+						}
+						tmpLoca = tmpLoca->next;
+					}
+					tmpGroup = tmpGroup->next;
+				}
+				else {
+					break;
+				}
+				}
+				tmpComm = tmpComm->next;
 			}
 		}
-		else 
-		{
-			index++;
+		printf("3\n");
+		for (i = 0; i < numproc; i++) {
+			aList[i].commHead = 0;
+			aList[i].commTail = 0;
+			aList[i].locaGroupHead = 0;
+			aList[i].locaGroupTail = 0;
 		}
-		free(buffer);
 	}
-
-	for (i = 0; i < size; i++)
-	{
-		fclose(pFile[i]);
-	}
-	free(pFile);
-
-	//End Of File
-	//detect MCE across processes
-	printList(aList, size);
-	freeList(aList, size);
-
+	for (i = 0; i < numproc; i++) {
+			fclose(pFile[i]);
+		}
+	printf("1\n");
 	return 0;
 }

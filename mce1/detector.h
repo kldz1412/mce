@@ -22,11 +22,14 @@
 #define	LOAD			12
 #define	STORE			13
 #define CREATE			14
+#define SEND 			15
+#define RECV			16
 
 typedef struct Comm {
     int code;
 	char *target_addr;
 	int *clock;
+	int origin;
     struct Comm *next;
 } Comm;
 
@@ -45,7 +48,7 @@ typedef struct Loca {
 typedef struct LocaGroup {
 	struct Loca *locaHead;
 	struct Loca *locaTail;
-	LocaGroup *next;
+	struct LocaGroup *next;
 	int *clock;
 } LocaGroup;
 
@@ -53,6 +56,7 @@ typedef struct List {
     char *base;
     int size;
     int disp_unit;
+    int rank;
     struct Comm *commHead;
 	struct Comm *commTail;
     struct LocaGroup *locaGroupHead;
@@ -69,18 +73,9 @@ typedef struct List {
 int getEventCode(char *);
 char *convertCode2Name(int);
 int *getClock(char *);
-bool equalClock(int *, int *, int);
 bool isConcurrent(int *, int, int *, int);
 
-void insertCommNode(List *, int, int, char * /*, int *, int*/);
-void insertLocaNode(List *, int, char *);
 void freeList(List *, int);
 void printList(List *, int);
-void insertChain(Chai *, int, char *);
-void printChain(Chai);
-
-void readEventWithinEpoch(FILE **, int, List *, Chai, int);
-void detectMCEInProc(Chai);
-void detectMCEAcrossProc(List *, int);
 
 #endif
