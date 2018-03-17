@@ -112,7 +112,9 @@ char *convertCode2Name(int code)
 
 int *getClock(char *buffer)
 {
-	char *clockStr = strstr(buffer, "\t");
+	char *tmpStr = (char *) malloc (BUFFER_SIZE);
+	memcpy(tmpStr,buffer,strlen(buffer)+1);
+	char *clockStr = strstr(tmpStr, "\t");
 	clockStr++;
 	int *clock, i = 0;
 	clock = (int *) malloc(numproc * sizeof(int));
@@ -171,12 +173,13 @@ bool isCommConflict(Comm *op1, int rank1, Comm *op2, int rank2) {
 
 void checkNinsertComm(List **aList,char* buffer, int self_rank)
 {
-	char *p = strtok(buffer, "\t");
+	char * p;
+	p = strtok (buffer, "\t");
 	p = strtok (NULL, "\t");
 	p = strtok (NULL, "\t");
 	p = strtok (NULL, "\t");
 	int target_rank = atoi(p);
-	if (!aList[target_rank]->commHead)
+	if (aList[target_rank]->commHead == NULL)
 	{
 		aList[target_rank]->commTail = (Comm *) malloc(sizeof(Comm));
 		aList[target_rank]->commHead = aList[target_rank]->commTail;
@@ -231,7 +234,8 @@ bool isConflictInside(Loca *op1, Loca *op2){
 
 void checkNinsertLoca(List *aList,char* buffer)
 {
-	if (!aList->locaGroupTail->locaHead)
+	if (aList->locaGroupTail == NULL) insertGroup(aList, aList->lastSyn);
+	if (aList->locaGroupTail->locaHead == NULL)
 	{
         aList->locaGroupTail->locaTail = (Loca *) malloc(sizeof(Loca));
         aList->locaGroupTail->locaHead = aList->locaGroupTail->locaTail;
@@ -261,7 +265,7 @@ void checkNinsertLoca(List *aList,char* buffer)
 
 void insertGroup(List *aList,char* buffer)
 {
-	if (!aList->locaGroupTail)
+	if (aList->locaGroupTail == NULL)
 	{
         aList->locaGroupTail = (LocaGroup *) malloc(sizeof(LocaGroup));
         aList->locaGroupHead = aList->locaGroupTail;
@@ -272,7 +276,9 @@ void insertGroup(List *aList,char* buffer)
         aList->locaGroupTail = aList->locaGroupTail->next;
     }
 	aList->locaGroupTail->clock = aList->lastClock;
-	aList->commTail->next = NULL;
+	aList->locaGroupTail->next = NULL;
+	aList->locaGroupTail->locaHead = NULL;
+	aList->locaGroupTail->locaTail = NULL;
 }
 
 
@@ -308,7 +314,8 @@ int main(int argc, char **argv)
 	numproc = atoi(argv[1]);
 	printf("1\n");
 	FILE **pFile = (FILE **) malloc(size * sizeof(FILE *));
-	List *aList = (List *) malloc(size * sizeof(List));
+	List **aList = (List **) malloc(size * sizeof(List *));
+	printf("2\n");
 	for (i = 0; i < size; i++)
 	{
 		sprintf(fileName, "trace%d", i);
@@ -317,7 +324,7 @@ int main(int argc, char **argv)
 		{
 			perror("Error opening file");
 		}
-
+		aList[i] = (List *) malloc(sizeof (List)); 
 		buffer = (char *) malloc(BUFFER_SIZE * sizeof(char));
 		fgets(buffer, BUFFER_SIZE, pFile[i]);
 
@@ -326,20 +333,21 @@ int main(int argc, char **argv)
 		free(tmpStr);
 
 		tmpStr = getData(&tmpBuffer);
-		aList[i].base = tmpStr;
+		aList[i]->base = tmpStr;
 
 		tmpStr = getData(&tmpBuffer);
-		aList[i].size = atoi(tmpStr);
+		aList[i]->size = atoi(tmpStr);
 		free(tmpStr);
 
 		tmpStr = getData(&tmpBuffer);
-		aList[i].disp_unit = atoi(tmpStr);
+		aList[i]->disp_unit = atoi(tmpStr);
 		free(tmpStr);
 
-		aList[i].commHead = NULL;
-		aList[i].commTail = NULL;
-		aList[i].locaGroupHead = NULL;
-		aList[i].locaGroupTail = NULL;
+		aList[i]->commHead = NULL;
+		aList[i]->commTail = NULL;
+		aList[i]->locaGroupHead = NULL;
+		aList[i]->locaGroupTail = NULL;
+		aList[i]->lastSyn = (char *) malloc (BUFFER_SIZE);
 		free(buffer);
 	}
 	printf("2\n");
@@ -350,28 +358,31 @@ int main(int argc, char **argv)
 				printf("%s\n",buffer);
 				int code = getEventCode(buffer);
 				if (code == FENCE || code == BARRIER) {
-					aList[i].lastClock = getClock(buffer);
+					aList[i]->lastClock = getClock(buffer);
 					printf("chua break\n" );
 					isFinished = false;
+					strcpy(aList[i]->lastSyn, buffer);
 					break;
 				}
 				else {
 					if (isSynOp(code)) {
-						aList[i].lastClock = getClock(buffer);
-						insertGroup(&aList[i], buffer);
+						aList[i]->lastClock = getClock(buffer);
+						//aList[i]->lastSyn = (char *) malloc (BUFFER_SIZE);
+					strcpy(aList[i]->lastSyn, buffer);
+						insertGroup(aList[i], buffer);
 					}
 					else {
 						if (code >= GET && code <= ACCUMULATE) {
-							checkNinsertLoca(&aList[i], buffer);
-							checkNinsertComm(&aList, buffer, i);
+							checkNinsertLoca(aList[i], buffer);
+							checkNinsertComm(aList, buffer, i);
 						}
 						else if (code >= LOAD && code <= STORE) {
-							checkNinsertLoca(&aList[i], buffer);
+							checkNinsertLoca(aList[i], buffer);
 						}
 					}
 				}
 			}
-			if (aList[i].locaGroupHead != NULL || aList[i].commHead != NULL) isFinished = false;
+			if (aList[i]->locaGroupHead != NULL || aList[i]->commHead != NULL) isFinished = false;
 		}
 		printf("1\n");
 		if (isFinished) break;
@@ -379,11 +390,12 @@ int main(int argc, char **argv)
 		printf("1\n");
 		//checkAcross(aList);
 		for (i = 0; i< numproc; i++){
-			Comm *tmpComm = aList[i].commHead;
-			while (!tmpComm) {
-				LocaGroup *tmpGroup = aList[i].locaGroupHead;
+			//if (!aList[i]->commHead) continue;
+			Comm *tmpComm = aList[i]->commHead;
+			while (tmpComm != NULL) {
+				LocaGroup *tmpGroup = aList[i]->locaGroupHead;
 				while (!tmpGroup) {
-					if (isConcurrent(tmpComm->clock, tmpComm->origin, tmpGroup->clock, aList[i].rank)) {
+					if (isConcurrent(tmpComm->clock, tmpComm->origin, tmpGroup->clock, aList[i]->rank)) {
 					Loca *tmpLoca = tmpGroup->locaHead;
 					while (!tmpLoca) {
 						//check tmpLoca vs tmpComm
@@ -404,10 +416,10 @@ int main(int argc, char **argv)
 		}
 		printf("3\n");
 		for (i = 0; i < numproc; i++) {
-			aList[i].commHead = 0;
-			aList[i].commTail = 0;
-			aList[i].locaGroupHead = 0;
-			aList[i].locaGroupTail = 0;
+			aList[i]->commHead = 0;
+			aList[i]->commTail = 0;
+			aList[i]->locaGroupHead = 0;
+			aList[i]->locaGroupTail = 0;
 		}
 	}
 	for (i = 0; i < numproc; i++) {

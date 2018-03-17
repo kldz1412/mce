@@ -62,6 +62,7 @@ typedef struct List {
     struct LocaGroup *locaGroupHead;
 	struct LocaGroup *locaGroupTail;
 	int *lastClock;
+	char *lastSyn;
 } List;
 
 /*typedef struct Chai {
@@ -74,8 +75,9 @@ int getEventCode(char *);
 char *convertCode2Name(int);
 int *getClock(char *);
 bool isConcurrent(int *, int, int *, int);
+void checkNinsertLoca(List *, char *);
+void checkNinsertComm(List **, char *, int);
+void insertGroup(List *, char *);
 
-void freeList(List *, int);
-void printList(List *, int);
 
 #endif
